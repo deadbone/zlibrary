@@ -1,7 +1,9 @@
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
+import asyncio
+import re
 from bs4 import BeautifulSoup as bsoup
 from bs4 import Tag
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 from .exception import ParseError
 from .logger import logger
@@ -11,6 +13,84 @@ import json
 
 DLNOTFOUND = "Downloads not found"
 LISTNOTFOUND = "On your request nothing has been found"
+TEMPORARY_TITLE_KEYWORDS = (
+    "just a moment",
+    "please wait",
+    "checking your browser",
+    "redirecting",
+)
+
+
+def _extract_temporary_redirect(
+    page: str,
+) -> Tuple[Optional[str], Optional[float], bool]:
+    soup = bsoup(page, features="lxml")
+    meta = soup.find("meta", attrs={"http-equiv": lambda v: v and v.lower() == "refresh"})
+    if meta:
+        content = meta.get("content", "")
+        delay = None
+        redirect_url = None
+        parts = [part.strip() for part in content.split(";") if part.strip()]
+        if parts:
+            try:
+                delay = float(parts[0])
+            except ValueError:
+                delay = None
+        for part in parts[1:]:
+            if part.lower().startswith("url="):
+                redirect_url = part.split("=", 1)[1].strip(" '\"")
+                break
+        return redirect_url, delay, True
+
+    redirect_url = None
+    delay = None
+    scripts = soup.find_all("script")
+    for script in scripts:
+        text = script.text or ""
+        if "location" not in text and "redirect" not in text:
+            continue
+        redirect_match = re.search(
+            r"location(?:\.href|\.replace)?\s*=\s*['\"]([^'\"]+)['\"]", text
+        )
+        if redirect_match:
+            redirect_url = redirect_match.group(1)
+        delay_match = re.search(r"setTimeout\([^,]+,\s*(\d+)\s*\)", text)
+        if delay_match:
+            delay = float(delay_match.group(1)) / 1000
+        if redirect_url or delay is not None:
+            return redirect_url, delay, True
+
+    title = soup.title.text.strip().lower() if soup.title and soup.title.text else ""
+    if any(keyword in title for keyword in TEMPORARY_TITLE_KEYWORDS):
+        return None, None, True
+
+    if not title and not soup.get_text(strip=True):
+        return None, None, True
+
+    return None, None, False
+
+
+async def _fetch_with_temporary_wait(
+    request: Callable, url: str, retries: int = 3, default_delay: float = 2.0
+) -> str:
+    attempt_url = url
+    for attempt in range(retries + 1):
+        page = await request(attempt_url)
+        redirect_url, delay, is_temporary = _extract_temporary_redirect(page)
+        if not is_temporary:
+            return page
+        wait_for = delay if delay is not None else default_delay
+        logger.info(
+            "Temporary page detected for %s (attempt %s/%s); waiting %.1fs before retrying.",
+            attempt_url,
+            attempt + 1,
+            retries + 1,
+            wait_for,
+        )
+        await asyncio.sleep(wait_for)
+        if redirect_url:
+            attempt_url = urljoin(attempt_url, redirect_url)
+    return page
 
 
 class SearchPaginator:
@@ -138,7 +218,8 @@ class SearchPaginator:
 
     async def fetch_page(self):
         if self.__r:
-            return await self.__r(f"{self.__url}&page={self.page}")
+            url = f"{self.__url}&page={self.page}"
+            return await _fetch_with_temporary_wait(self.__r, url)
 
     async def next(self):
         if self.__pos >= len(self.storage[self.page]):
@@ -306,7 +387,8 @@ class BooklistPaginator:
 
     async def fetch_page(self):
         if self.__r:
-            return await self.__r(f"{self.__url}&page={self.page}")
+            url = f"{self.__url}&page={self.page}"
+            return await _fetch_with_temporary_wait(self.__r, url)
 
     async def next(self):
         if self.__pos >= len(self.storage[self.page]):
@@ -417,7 +499,8 @@ class DownloadsPaginator:
 
     async def fetch_page(self):
         if self.__r:
-            return await self.__r(f"{self.__url}&page={self.page}")
+            url = f"{self.__url}&page={self.page}"
+            return await _fetch_with_temporary_wait(self.__r, url)
 
     async def next_page(self):
         self.page += 1
@@ -453,7 +536,7 @@ class BookItem(dict):
     async def fetch(self):
         if not self.__r:
             raise ParseError("Instance of BookItem does not contain a request method.")
-        page = await self.__r(self["url"])
+        page = await _fetch_with_temporary_wait(self.__r, self["url"])
         soup = bsoup(page, features="lxml")
 
         wrap = soup.find("div", {"class": "row cardBooks"})
