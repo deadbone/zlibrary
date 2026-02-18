@@ -8,6 +8,11 @@ class ParseError(Exception):
         super().__init__(message)
 
 
+class SecurityCheckError(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+
+
 class LoginFailed(Exception):
     def __init__(self, message):
         super().__init__(message)

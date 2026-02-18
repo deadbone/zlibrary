@@ -154,6 +154,18 @@ await lib.init()
 
 ```
 
+### Security checks / browser verification
+If Z-Library returns a browser verification page, the library will raise a
+`SecurityCheckError`. In that case, use a verified mirror or onion access, or
+pass clearance cookies/headers obtained from a real browser session:
+
+```python
+lib = zlibrary.AsyncZlib(
+    headers={"User-Agent": "..."},
+    cookies={"cf_clearance": "..."},
+)
+```
+
 ### Download history
 ```python
 await lib.login(email, password)
