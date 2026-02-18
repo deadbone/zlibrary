@@ -62,7 +62,12 @@ class AsyncZlib:
         onion: bool = False,
         proxy_list: Optional[list] = None,
         disable_semaphore: bool = False,
+        headers: Optional[dict] = None,
+        cookies: Optional[dict] = None,
     ):
+        self.headers = headers
+        if cookies:
+            self.cookies = cookies
         if proxy_list:
             if type(proxy_list) is list:
                 self.proxy_list = proxy_list
@@ -93,11 +98,17 @@ class AsyncZlib:
         if self.semaphore:
             async with self.__semaphore:
                 return await GET_request(
-                    url, proxy_list=self.proxy_list, cookies=self.cookies
+                    url,
+                    proxy_list=self.proxy_list,
+                    cookies=self.cookies,
+                    headers=self.headers,
                 )
         else:
             return await GET_request(
-                url, proxy_list=self.proxy_list, cookies=self.cookies
+                url,
+                proxy_list=self.proxy_list,
+                cookies=self.cookies,
+                headers=self.headers,
             )
 
     async def login(self, email: str, password: str):
@@ -113,7 +124,7 @@ class AsyncZlib:
         }
 
         resp, jar = await POST_request(
-            self.login_domain, data, proxy_list=self.proxy_list
+            self.login_domain, data, proxy_list=self.proxy_list, headers=self.headers
         )
         resp = json.loads(resp)
         resp = resp['response']
@@ -133,7 +144,10 @@ class AsyncZlib:
                 self.cookies["remix_userid"],
             )
             resp, jar = await GET_request_cookies(
-                url, proxy_list=self.proxy_list, cookies=self.cookies
+                url,
+                proxy_list=self.proxy_list,
+                cookies=self.cookies,
+                headers=self.headers,
             )
 
             self._jar = jar
